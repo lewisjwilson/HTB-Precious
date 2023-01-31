@@ -115,12 +115,87 @@ Navigating to `/home`, we find there are two users:
 1. `ruby` (current user)
 2. `henry`
 
-In `henry`'s home directory, we find the `user.txt` flag. cat, head and less don't work on this file do to restrictions. Let's try sshing into the machine as we at least have `henry` username!
+In `henry`'s home directory, we find the `user.txt` flag. cat, head and less don't work on this file do to restrictions. 
+
+Luckily, if we do a quick `whoami`, we find that the current user is `ruby`.
+After a bit of searching, we find the file `config` in the `/home/ruby/.bundle` folder. Catting out this file...
+
+```
+$ cat config 
+---
+BUNDLE_HTTPS://RUBYGEMS__ORG/: "henry:Q3c1AqGHtoI0aXAYFH"
+```
+
+We find henry's password! Time to ssh!
 
 
-### hydra
+### SSH (henry)
 
-Let's try and bruteforce the ssh password with hydra.
+Using the password we found for user `henry` from before:
+
+```
+$ ssh  henry@10.10.11.189             
+henry@10.10.11.189's password: *************
+```
+
+Boom! We're in!
+Now we can cat the user password!
+
+```
+$ cat user.txt
+b47ea5d5a17c22a8975f45d7386b1f37
+```
 
 
+### linpeas
 
+Checking what we can run as sudo:
+
+```
+$ sudo -l
+Matching Defaults entries for henry on precious:
+    env_reset, mail_badpass, secure_path=/usr/local/sbin\:/usr/local/bin\:/usr/sbin\:/usr/bin\:/sbin\:/bin
+
+User henry may run the following commands on precious:
+    (root) NOPASSWD: /usr/bin/ruby /opt/update_dependencies.rb
+```
+
+So, we can run `/opt/update_dependencies.rb` as root. Let's cat the file...
+
+```
+$ cat /opt/update_dependencies.rb
+# Compare installed dependencies with those specified in "dependencies.yml"
+require "yaml"
+require 'rubygems'
+
+# TODO: update versions automatically
+def update_gems()
+end
+
+def list_from_file
+    YAML.load(File.read("dependencies.yml"))
+end
+
+def list_local_gems
+    Gem::Specification.sort_by{ |g| [g.name.downcase, g.version] }.map{|g| [g.name, g.version.to_s]}
+end
+
+gems_file = list_from_file
+gems_local = list_local_gems
+
+gems_file.each do |file_name, file_version|
+    gems_local.each do |local_name, local_version|
+        if(file_name == local_name)
+            if(file_version != local_version)
+                puts "Installed version differs from the one specified in file: " + local_name
+            else
+                puts "Installed version is equals to the one specified in file: " + local_name
+            end
+        end
+    end
+end
+```
+
+[Hacktricks tells us](https://book.hacktricks.xyz/pentesting-web/deserialization/python-yaml-deserialization) that we can perform a deserialization attack via `YAML.load()`.
+
+Let's check the `dependencies.yml` file:
